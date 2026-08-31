@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Analysis Platform</title>
+  <script>
+    window.onerror = function(msg, url, lineNo, columnNo, error) {
+      fetch('/api/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'onerror', msg, url, lineNo, columnNo, stack: error ? error.stack : '' })
+      });
+      return false;
+    };
+    window.addEventListener('unhandledrejection', function(event) {
+      fetch('/api/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'unhandledrejection', reason: event.reason ? event.reason.toString() : 'Unknown', stack: event.reason && event.reason.stack ? event.reason.stack : '' })
+      });
+    });
+  </script>
+  
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <link rel="stylesheet" href="/static/css/style_v2.css" />
+</head>
+<body>
+  
+  <div class="app-container">
+    
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="header-title">
+        <h1 id="headerName">Apple Inc</h1>
+        <p id="headerSymbol">NASDAQ: AAPL</p>
+      </div>
+      <nav class="top-nav">
+        <button class="nav-tab active">Summary</button>
+        <button class="nav-tab">Chart</button>
+        <button class="nav-tab">Financials</button>
+        <button class="nav-tab">Analysis</button>
+        <button class="nav-tab">Profile</button>
+        <button class="nav-tab">Earnings</button>
+        <button class="nav-tab">Compare</button>
+      </nav>
+      <div class="search-box">
+        <input type="text" id="symbolSearch" placeholder="Search for a stock..." autocomplete="off" />
+        <div id="searchResults" class="search-results hidden"></div>
+      </div>
+    </header>
+
+    <main class="app-main">
+      
+      <!-- ==================== SUMMARY TAB ==================== -->
+      <div class="tab-content active" id="tab-summary">
+        <div class="summary-layout">
+          
+          <!-- Left Column -->
+          <div class="summary-left">
+            <div class="price-header-box">
+              <div class="massive-price-wrapper">
+                <span class="massive-price" id="statPrice">--</span>
+                <span class="price-currency">USD</span>
+                <span class="price-change positive" id="statChange">--</span>
+                <span class="price-today">today</span>
+              </div>
+              <div class="after-hours-text" id="statAfterHours">After Hours: Market Closed</div>
+              <div class="timeframe-pills">
+                <button class="tf-pill active">1D</button>
+                <button class="tf-pill">5D</button>
+                <button class="tf-pill">1M</button>
+                <button class="tf-pill">1Y</button>
+                <button class="tf-pill">5Y</button>
+                <button class="tf-pill">Max</button>
+              </div>
+            </div>
+            
+            <div class="main-chart-wrapper">
+              <div id="summaryChartContainer" class="summary-chart-container"></div>
+            </div>
+            
+            <div class="stats-grid">
+              <div class="stat-item"><span class="stat-lbl">Open</span><strong class="stat-val" id="statOpen">--</strong></div>
+              <div class="stat-item"><span class="stat-lbl">Vol</span><strong class="stat-val" id="statVol">--</strong></div>
+              <div class="stat-item"><span class="stat-lbl">High</span><strong class="stat-val" id="statHigh">--</strong></div>
+              <div class="stat-item"><span class="stat-lbl">Avg Vol</span><strong class="stat-val" id="statAvgVol">--</strong></div>
+              <div class="stat-item"><span class="stat-lbl">Low</span><strong class="stat-val" id="statLow">--</strong></div>
+              <div class="stat-item"><span class="stat-lbl">52wk High</span><strong class="stat-val" id="stat52High">--</strong></div>
+              <div class="stat-item"><span class="stat-lbl">Mkt Cap</span><strong class="stat-val" id="statMktCap">--</strong></div>
+              <div class="stat-item"><span class="stat-lbl">52wk Low</span><strong class="stat-val" id="stat52Low">--</strong></div>
+            </div>
+          </div>
+          
+          <!-- Center Column -->
+          <div class="summary-center">
+            <div class="top-widgets">
+              <div class="widget-card gauge-card">
+                <h3>Analyst rating <span class="arrow-right">></span></h3>
+                <div class="gauge-wrapper">
+                   <canvas id="analystGauge"></canvas>
+                   <div class="gauge-center-text">
+                     <strong id="gaugeRec">--</strong>
+                     <small id="gaugeBasedOn">Based on -- analysts</small>
+                   </div>
+                </div>
+              </div>
+              <div class="widget-card pe-card">
+                <h3>PE ratio <span class="arrow-right">></span></h3>
+                <div class="canvas-wrapper">
+                  <canvas id="peBarChart"></canvas>
+                </div>
+              </div>
+            </div>
+            <div class="news-widgets" id="newsContainer">
+               <!-- Populated via JS -->
+            </div>
+          </div>
+
+          <!-- Right Column -->
+          <div class="summary-right">
+            <div class="watchlist-panel" id="watchlistPanel">
+               <!-- Populated via JS -->
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ==================== CHART TAB ==================== -->
+      <div class="tab-content" id="tab-chart">
+        <div class="card full-height-card">
+          <div class="chart-header">
+             <div class="timeframe-pills">
+                <button class="tf-pill active">1D</button>
+                <button class="tf-pill">5D</button>
+                <button class="tf-pill">1M</button>
+                <button class="tf-pill">3M</button>
+                <button class="tf-pill">YTD</button>
+                <button class="tf-pill">1Y</button>
+                <button class="tf-pill">5Y</button>
+                <button class="tf-pill">Max</button>
+              </div>
+          </div>
+          <div id="fullChartContainer" class="full-chart-container"></div>
+        </div>
+      </div>
+
+      <!-- ==================== FINANCIALS TAB ==================== -->
+      <div class="tab-content" id="tab-financials">
+        <div class="card full-height-card">
+          <div class="fin-tabs" style="border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+            <button class="fin-tier1-tab active" data-target="income-statement">Income Statement</button>
+            <button class="fin-tier1-tab" data-target="balance-sheet">Balance Sheet</button>
+            <button class="fin-tier1-tab" data-target="cash-flow">Cash Flow</button>
+          </div>
+          <div id="financialsContainer">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== ANALYSIS TAB ==================== -->
+      <div class="tab-content" id="tab-analysis">
+        <div class="card full-height-card">
+          <div class="fin-tabs" style="border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+            <button class="fin-tier1-tab active" data-target="key-ratios">Key Ratios</button>
+          </div>
+          <div id="analysisShellContainer">
+            <!-- Populated via JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== PROFILE TAB ==================== -->
+      <div class="tab-content" id="tab-profile">
+        <div class="analysis-layout">
+           <div class="card analysis-text-card">
+             <h3>Company Profile</h3>
+             <p id="companyDesc">--</p>
+             <div class="company-meta mt-3">
+               <div><strong>Sector:</strong> <span id="companySector">--</span></div>
+               <div><strong>Industry:</strong> <span id="companyIndustry">--</span></div>
+             </div>
+           </div>
+           <div class="card analysis-holders-card">
+             <h3>Top Institutional Holders</h3>
+             <table class="holders-table mt-2">
+               <thead><tr><th>Holder</th><th>Shares</th><th>% Held</th></tr></thead>
+               <tbody id="holdersBody"></tbody>
+             </table>
+           </div>
+        </div>
+      </div>
+
+      <!-- ==================== EARNINGS TAB ==================== -->
+      <div class="tab-content" id="tab-earnings">
+        
+        <!-- Top Row Widgets -->
+        <div class="earnings-top-row">
+          <!-- Upcoming Earnings -->
+          <div class="card earn-widget">
+            <h3><i class="fas fa-calendar-alt"></i> UPCOMING EARNINGS ANNOUNCEMENT</h3>
+            <div class="earn-upcoming-body mt-3">
+              <div class="earn-date-block">
+                <div class="earn-date-val" id="earnUpDate">--</div>
+                <div class="earn-meta">DATE (EDT)</div>
+              </div>
+              <div class="earn-days-block">
+                <div class="earn-days-val" id="earnUpDays">--</div>
+                <div class="earn-meta">DAYS</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Forecast -->
+          <div class="card earn-widget">
+            <h3><i class="fas fa-chart-line"></i> FORECAST</h3>
+            <div class="earn-forecast-body mt-3">
+              <div class="fc-row">
+                <div class="fc-label">Consensus EPS<br><span class="fc-sub">Last year's EPS <span id="fcLastEps">--</span></span></div>
+                <div class="fc-val" id="fcEps">--</div>
+              </div>
+              <div class="fc-row mt-4">
+                <div class="fc-label">Consensus Revenue<br><span class="fc-sub">Last year's revenue <span id="fcLastRev">--</span></span></div>
+                <div class="fc-val" id="fcRev">--</div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Performance -->
+          <div class="card earn-widget">
+            <h3><i class="fas fa-tachometer-alt"></i> PERFORMANCE</h3>
+            <div class="earn-perf-body mt-3" id="earnPerfContainer">
+              <!-- Dynamically populated -->
+            </div>
+          </div>
+          
+          <!-- Analyst Recommendation -->
+          <div class="card earn-widget earn-analyst-widget">
+            <h3>ANALYST RECOMMENDATION</h3>
+            <div class="earn-analyst-body mt-2">
+              <div class="analyst-main-rec positive" id="analystMainRec">Buy</div>
+              <div class="analyst-sub">Based on <span id="analystCount">--</span> analysts, <span id="analystDate">--</span></div>
+              
+              <div class="gauge-container mt-4">
+                <canvas id="earnAnalystGauge"></canvas>
+                <div class="gauge-labels">
+                  <span class="gl-ssell">Strong<br>Sell</span>
+                  <span class="gl-sell">Sell</span>
+                  <span class="gl-hold">Hold</span>
+                  <span class="gl-buy">Buy</span>
+                  <span class="gl-sbuy">Strong<br>Buy</span>
+                </div>
+              </div>
+              
+              <div class="analyst-breakdown mt-4" id="analystBreakdown">
+                <!-- Populated via JS -->
+              </div>
+              
+              <div class="analyst-stats mt-4">
+                <div class="astat-block">
+                  <div class="astat-row"><span>12 Month Price Target</span> <strong id="analystTarget">--</strong></div>
+                  <div class="astat-sub">Based on <span id="analystTargetCount">--</span> analysts</div>
+                </div>
+                <div class="astat-block">
+                  <div class="astat-row"><span>Price Volatility</span> <strong>Below Average</strong></div>
+                  <div class="astat-sub">Last updated: <span id="volDate">--</span></div>
+                </div>
+                <div class="astat-block">
+                  <div class="astat-row"><span>Industry Recommendation</span> <strong class="positive">Buy</strong></div>
+                  <div class="astat-sub">Last updated: <span id="indDate">--</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Middle Row: Chart -->
+        <div class="card mt-3">
+          <div class="earn-chart-header">
+             <h3><i class="fas fa-chart-bar"></i> EARNINGS PER SHARE & REVENUE</h3>
+             <div class="earn-chart-toggles">
+                <button class="earn-toggle active" id="btnEarnEps">EPS</button>
+                <button class="earn-toggle" id="btnEarnRev">Revenue</button>
+             </div>
+          </div>
+          <div class="canvas-wrapper mt-4" style="height:250px;">
+            <canvas id="epsBarChart"></canvas>
+          </div>
+        </div>
+        
+        <!-- Bottom Row: History & Related -->
+        <div class="earnings-bottom-row mt-3">
+           <div class="card earn-history-card">
+              <h3><i class="fas fa-history"></i> EARNINGS HISTORY</h3>
+              <div class="table-container mt-3">
+                <table class="history-table">
+                  <thead>
+                    <tr><th>Report Date</th><th>Fiscal Quarter</th><th>Forecast/EPS</th><th>Last Year's EPS</th><th>EPS YoY Change</th></tr>
+                  </thead>
+                  <tbody id="earningsHistoryBody"></tbody>
+                </table>
+              </div>
+           </div>
+           
+           <div class="card earn-related-card">
+              <h3><i class="fas fa-building"></i> Earnings From Related Companies</h3>
+              <div class="earn-chart-toggles mt-3" style="justify-content:flex-start;">
+                 <button class="earn-toggle active" id="btnRelRep">Reported</button>
+                 <button class="earn-toggle" id="btnRelFcst">Forecast</button>
+              </div>
+              <div class="table-container mt-3">
+                <table class="related-table">
+                  <thead>
+                    <tr><th>Company</th><th>EPS Surprise%</th><th>Date</th></tr>
+                  </thead>
+                  <tbody id="relatedEarnBody"></tbody>
+                </table>
+              </div>
+           </div>
+        </div>
+
+      </div>
+
+      <!-- ==================== COMPARE TAB ==================== -->
+      <div class="tab-content" id="tab-compare">
+        <div class="card">
+          <div class="compare-header">
+            <h3>Compare Performance</h3>
+            <div class="legend" id="compareLegend"></div>
+          </div>
+          <div id="compareChartContainer" class="compare-chart-container mt-4"></div>
+          
+          <h3 class="mt-4 pt-4" style="border-top: 1px solid var(--border);">Detailed Comparison</h3>
+          <div class="compare-grid" id="compareGrid">
+            <!-- Dynamically populated via JS -->
+          </div>
+
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="/static/js/main_v2.js"></script>
+</body>
+</html>
