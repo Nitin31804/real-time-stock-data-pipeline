@@ -1,200 +1,108 @@
-# 📈 Real-Time Stock Data Pipeline
+# ?? Real-Time Enterprise Stock Data Pipeline
 
-A production-grade streaming data pipeline for live stock market data built with **Apache Kafka**, **PySpark Structured Streaming**, **PostgreSQL / TimescaleDB**, and a **premium real-time dashboard**.
+A production-grade, highly concurrent streaming data pipeline for live stock market data. This project demonstrates end-to-end data engineering, cloud-native infrastructure, and a Bloomberg-style terminal UI.
 
-```
-Finnhub WebSocket API / GBM Mock Generator
-            ↓
-   Python Producer  →  Kafka (stock.raw-ticks.v1)
-                              ↓
-                    PySpark Structured Streaming
-                     (1-min OHLCV + VWAP windows)
-                              ↓
-                 PostgreSQL + TimescaleDB
-                              ↓
-              Flask SSE API + TradingView Dashboard
-```
+`mermaid
+graph LR
+    A[Finnhub WS / Mocks] --> B(Python Producer)
+    B --> C{Apache Kafka}
+    C --> D[PySpark Streaming]
+    D --> E[(TimescaleDB / Postgres)]
+    E --> F[Flask / Gevent API]
+    F -- Server-Sent Events --> G[TradingView UI]
+`
 
 ---
 
-## 🚀 Quick Start
+## ?? Key Enterprise Features (10/10 Architecture)
+
+* **Infrastructure as Code (Terraform):** Fully codified AWS deployment via Terraform (VPC, MSK, RDS, ECS). 
+* **Kubernetes Ready:** Included k8s/ manifests for deploying Spark Jobs and Flask APIs to EKS.
+* **Asynchronous Concurrency:** The Flask API runs on gevent greenlets, safely serving thousands of concurrent Server-Sent Event (SSE) streams without blocking the WSGI thread pool.
+* **Race Condition Prevention:** The Vanilla JS frontend utilizes AbortController to cancel in-flight API requests when rapidly switching tabs, eliminating UI state mutations.
+* **Resilient API Caching:** Yahoo Finance API rates are mitigated via cachetools.TTLCache, providing lightning-fast frontend responses while preventing 429 Too Many Requests errors.
+* **CI/CD Pipelines:** Automated GitHub Actions (.github/workflows/ci.yml) for linting and Pytest validation.
+
+---
+
+## ? Quick Start (Local Docker Compose)
 
 ### Prerequisites
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (running)
-- 8 GB RAM recommended (Kafka + Spark + PostgreSQL)
+- Docker Desktop (8 GB RAM recommended for Kafka + Spark)
 
-### 1. Clone & configure
-```bash
+### 1. Configure
+`ash
 cd stock-pipeline
 cp .env.example .env
-# Optional: add your Finnhub API key to .env for live data
-# Leave FINNHUB_API_KEY blank to use the built-in GBM mock generator
-```
+# Add your FINNHUB_API_KEY to .env for real live trade ticks
+`
 
-### 2. Launch the pipeline
-```bash
+### 2. Launch
+`ash
 docker compose up -d --build
-```
+`
 
-Or with `make`:
-```bash
-make up
-```
-
-### 3. Open the dashboard
+### 3. Open the Dashboard
 | Service | URL |
 |---|---|
-| **📊 Dashboard** | http://localhost:5000 |
-| **⚡ Spark UI** | http://localhost:8080 |
-| **🐘 PostgreSQL** | localhost:5432 |
-| **📨 Kafka** | localhost:29092 |
+| **Terminal Dashboard** | http://localhost:5000 |
+| **Spark UI** | http://localhost:8080 |
 
 ---
 
-## 🏗️ Project Structure
+## ??? Project Structure
 
-```
+`	ext
 stock-pipeline/
-├── docker-compose.yml          # Orchestrates all 7 services
-├── .env.example                # Environment variable template
-├── Makefile                    # Convenience commands
-│
-├── producer/                   # Kafka Producer
-│   ├── producer.py             # Finnhub WS + GBM fallback
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── spark_processor/            # PySpark Streaming Job
-│   ├── streaming_job.py        # OHLCV aggregation + JDBC write
-│   ├── requirements.txt
-│   └── Dockerfile
-│
-├── db/
-│   └── init.sql                # Schema: ticks, OHLCV, indicators, health
-│
-└── dashboard/                  # Flask Web Dashboard
-    ├── app.py                  # Flask + SSE + REST API
-    ├── requirements.txt
-    ├── Dockerfile
-    ├── templates/
-    │   └── dashboard.html      # Premium dark terminal UI
-    └── static/
-        ├── css/style.css       # Design system
-        └── js/main.js          # TradingView charts + SSE client
-```
++-- .github/workflows/    # CI/CD Pipelines
++-- terraform/            # AWS IaC (VPC, MSK, RDS, ECS)
++-- k8s/                  # Kubernetes Deployment Manifests
++-- docker-compose.yml    # Local Orchestration
++-- producer/             # Python Kafka Producer (Finnhub WS)
++-- spark_processor/      # PySpark Structured Streaming (1m OHLCV Aggregation)
++-- db/                   # PostgreSQL/TimescaleDB Schemas
++-- dashboard/            # Flask API & Frontend
+    +-- app.py            # Gevent SSE endpoints & TTLCache
+    +-- static/js/        # TradingView Integration & AbortControllers
+    +-- static/css/       # Premium Trading Terminal UI (Tabular Nums, Dark Mode)
+`
 
 ---
 
-## 🔧 Architecture Deep Dive
+## ?? Cloud Deployment (AWS)
 
-### 1. Producer (`producer/`)
-- **Primary mode**: Connects to [Finnhub WebSocket API](https://finnhub.io) — set `FINNHUB_API_KEY` in `.env`
-- **Fallback mode**: GBM (Geometric Brownian Motion) mock generator — auto-activates when no API key is set
-- Publishes JSON tick messages to Kafka topic `stock.raw-ticks.v1`
-- Partition key = `symbol` (guarantees ordering per stock)
+To deploy to a production AWS environment, use the provided Terraform configurations:
 
-**Tick message format:**
-```json
-{
-  "event_id": "uuid",
-  "symbol":   "AAPL",
-  "price":    185.42,
-  "volume":   350,
-  "timestamp": "2026-07-25T11:22:49.123Z",
-  "exchange":  "MOCK",
-  "source":    "gbm_mock"
-}
-```
+`ash
+cd terraform
+terraform init
+terraform plan -var="db_user=admin" -var="db_password=super_secret"
+terraform apply
+`
+*Deploys: Amazon MSK (Kafka), Amazon RDS (PostgreSQL), and Amazon ECS.*
 
-### 2. Kafka Topics
-| Topic | Partitions | Purpose |
-|---|---|---|
-| `stock.raw-ticks.v1` | 4 | Raw trade ticks (keyed by symbol) |
-| `stock.dlq.v1` | 1 | Dead-letter queue for malformed records |
+## ?? Kubernetes Deployment
 
-### 3. Spark Streaming Job (`spark_processor/`)
-- Reads from `stock.raw-ticks.v1`
-- Enforces schema + 30-second watermark for late data
-- Routes invalid records to DLQ
-- Computes **1-minute OHLCV candles** + **VWAP** using windowed aggregation
-- Upserts to PostgreSQL via idempotent staging table pattern
-- Triggers every 15 seconds
+To deploy the Spark streaming job and Flask frontend to a Kubernetes cluster (e.g., EKS or Minikube):
 
-### 4. Database (`db/`)
-| Table | Type | Description |
-|---|---|---|
-| `raw_stock_ticks` | Hypertable | Individual trade ticks (audit log) |
-| `stock_ohlcv_1m` | Hypertable | 1-minute OHLCV candles (primary) |
-| `stock_technical_indicators` | Regular | SMA, EMA, RSI, MACD values |
-| `pipeline_health` | Regular | Service status heartbeats |
-
-### 5. Dashboard (`dashboard/`)
-- **Flask** backend with `ThreadedConnectionPool` for PostgreSQL
-- **Server-Sent Events (SSE)** at `/stream/<symbol>` — pushes latest candle every second
-- **REST API**: `/api/tickers`, `/api/candles/<symbol>`, `/api/stats/<symbol>`, `/api/health`
-- **Frontend**: TradingView Lightweight Charts for hardware-accelerated candlestick rendering
-- Real-time RSI, SMA-10, SMA-20 computed on the fly
+`ash
+cd k8s
+kubectl apply -f dashboard-deployment.yaml
+kubectl apply -f spark-job.yaml
+`
 
 ---
 
-## 🛠️ Useful Commands
+## ??? DevOps & Testing
 
-```bash
-# View logs
-make logs                      # All services
-make log SERVICE=producer      # Specific service
+The repository automatically runs tests on every push and pull_request to main.
+To run tests locally:
+`ash
+pip install pytest flake8
+flake8 dashboard/ producer/ spark/
+pytest tests/
+`
 
-# Inspect data
-make db-check                  # Show latest OHLCV rows
-make db-stats                  # Row counts per table
-make kafka-topics              # List Kafka topics
-
-# Stop / reset
-make down                      # Stop containers (preserves data)
-make reset                     # Wipe all data (volumes deleted)
-```
-
----
-
-## 📊 Dashboard Features
-
-| Feature | Description |
-|---|---|
-| **Candlestick Chart** | 1-minute OHLCV with TradingView Lightweight Charts |
-| **Volume Chart** | Synchronized volume histogram (green/red colored) |
-| **Live Ticker Panel** | Watchlist with real-time price + % change + flash animations |
-| **OHLCV Header** | Open / High / Low / Close / Volume for current bar |
-| **Technical Indicators** | VWAP, SMA-10, SMA-20, RSI-14 |
-| **RSI Gauge** | Visual needle showing overbought / oversold zones |
-| **Pipeline Health** | Live status for all services |
-| **Market Clock** | UTC clock synced every second |
-
----
-
-## 🔑 Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `FINNHUB_API_KEY` | _(empty)_ | Finnhub API key (leave blank for mock mode) |
-| `KAFKA_TOPIC` | `stock.raw-ticks.v1` | Primary Kafka topic name |
-| `POSTGRES_DB` | `stock_db` | PostgreSQL database name |
-| `POSTGRES_USER` | `postgres` | PostgreSQL user |
-| `POSTGRES_PASSWORD` | `postgres` | PostgreSQL password |
-| `STOCK_SYMBOLS` | `AAPL,GOOGL,MSFT,AMZN,TSLA` | Comma-separated watchlist |
-| `TICK_INTERVAL_MS` | `500` | Mock generator tick frequency (ms) |
-
----
-
-## 🩺 Troubleshooting
-
-**Dashboard shows no data?**
-> Spark Structured Streaming aggregates on 1-minute windows. Wait 60-90 seconds after startup for the first candle to appear.
-
-**Kafka container unhealthy?**
-> Kafka takes 20-30 seconds to initialize. Producer and Spark job retry automatically.
-
-**Spark job fails to connect?**
-> Check `docker compose logs spark-job`. The JDBC JARs are pre-downloaded in the Dockerfile. If the build fails, ensure Docker has internet access.
-
-**Out of memory errors?**
-> Increase Docker Desktop memory to 8 GB+ in Settings → Resources.
+## ?? Troubleshooting
+- **No data on the chart?** Spark Structured Streaming aggregates on 1-minute windows. Wait 60 seconds after startup for the first candle to appear.
+- **Kafka Unhealthy?** Kafka takes ~20 seconds to boot. The Producer and Spark job will automatically retry connections.

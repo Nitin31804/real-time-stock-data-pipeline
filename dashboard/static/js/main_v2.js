@@ -3,6 +3,10 @@ let CURRENT_SYMBOL = "AAPL";
 let SYMBOLS = [];
 let eventSource = null;
 
+// Abort Controllers for preventing race conditions
+let timeframeAbortController = null;
+let tabDataAbortController = null;
+
 // Charts
 let summaryChart, summarySeries, summaryVolSeries;
 let fullChart, fullCandleSeries, fullVolSeries;
@@ -49,7 +53,7 @@ function renderWatchlist() {
       <div class="watchlist-item" onclick="switchSymbol('${t.symbol}')">
         <div class="wl-header">
            <span class="wl-name">${t.symbol}</span>
-           <span class="wl-price">${(t.price || 0).toFixed(2)}</span>
+           <span class="wl-price">${(t.close || 0).toFixed(2)}</span>
         </div>
         <div class="wl-change ${cls}">${sign}${chg.toFixed(2)}%</div>
       </div>
@@ -86,10 +90,55 @@ function initSubTabs() {
       pill.onclick = () => {
         pills.forEach(p => p.classList.remove('active'));
         pill.classList.add('active');
-        // We could fetch different timeframes here
+        handleTimeframeChange(pill.innerText.trim());
       };
     });
   });
+
+async function handleTimeframeChange(tf) {
+  let endpoint = `/api/candles/${CURRENT_SYMBOL}?limit=120`; 
+  if (tf === '1D') endpoint = `/api/candles/${CURRENT_SYMBOL}?limit=390`; 
+  else if (tf === '5D') endpoint = `/api/history/${CURRENT_SYMBOL}?period=5d&interval=5m`;
+  else if (tf === '1M') endpoint = `/api/history/${CURRENT_SYMBOL}?period=1mo&interval=1d`;
+  else if (tf === '3M') endpoint = `/api/history/${CURRENT_SYMBOL}?period=3mo&interval=1d`;
+  else if (tf === '6M') endpoint = `/api/history/${CURRENT_SYMBOL}?period=6mo&interval=1d`;
+  else if (tf === 'YTD') endpoint = `/api/history/${CURRENT_SYMBOL}?period=ytd&interval=1d`;
+  else if (tf === '1Y') endpoint = `/api/history/${CURRENT_SYMBOL}?period=1y&interval=1d`;
+  else if (tf === '5Y') endpoint = `/api/history/${CURRENT_SYMBOL}?period=5y&interval=1wk`;
+  else if (tf === 'All') endpoint = `/api/history/${CURRENT_SYMBOL}?period=max&interval=1mo`;
+
+  if (timeframeAbortController) timeframeAbortController.abort();
+  timeframeAbortController = new AbortController();
+
+  try {
+    const res = await fetch(endpoint, { signal: timeframeAbortController.signal });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.candles) return;
+    
+    const cData = data.candles.map(c => ({
+      time: new Date(c.bucket_start).getTime() / 1000,
+      open: c.open, high: c.high, low: c.low, close: c.close
+    })).sort((a,b) => a.time - b.time);
+    
+    const vData = data.candles.map(c => ({
+      time: new Date(c.bucket_start).getTime() / 1000,
+      value: c.volume,
+      color: c.close >= c.open ? 'rgba(16, 185, 129, 0.5)' : 'rgba(239, 68, 68, 0.5)'
+    })).sort((a,b) => a.time - b.time);
+    
+    if (fullCandleSeries) fullCandleSeries.setData(cData);
+    if (fullVolSeries) fullVolSeries.setData(vData);
+    if (fullChart) fullChart.timeScale().fitContent();
+    
+    if (summarySeries) summarySeries.setData(cData);
+    if (summaryVolSeries) summaryVolSeries.setData(vData);
+    if (summaryChart) summaryChart.timeScale().fitContent();
+  } catch(e) {
+    if (e.name === 'AbortError') return;
+    console.error("Failed to load timeframe", e);
+  }
+}
 
   // Financial Tabs
   const finTabs = document.querySelectorAll('.fin-tab');
@@ -282,7 +331,7 @@ function handleStreamMessage(e) {
   el("statVol").innerText = formatNumber(data.volume);
   
   const tick = {
-    time: new Date(data.time).getTime() / 1000,
+    time: new Date(data.bucket_start).getTime() / 1000,
     open: data.open, high: data.high, low: data.low, close: data.close
   };
   summarySeries.update(tick);
@@ -369,6 +418,10 @@ async function loadCompanyInfo(sym) {
   const res = await fetch(`/api/company_info/${sym}`);
   if(!res.ok) return;
   const d = await res.json();
+  
+  if (d.name) {
+    el("headerName").innerText = d.name;
+  }
   
   el("companyDesc").innerText = d.description || '--';
   el("companySector").innerText = d.sector || '--';
@@ -533,7 +586,7 @@ function renderRelatedEarn(mode) {
       const sign = r.surprise > 0 ? '+' : '';
       return `
         <tr>
-          <td><strong>${r.sym}</strong><br><span style="color:var(--text-muted); font-size:11px;">${r.name}</span></td>
+          <td><strong style="cursor:pointer; color:var(--text-main);" onclick="switchSymbol('${r.sym}')">${r.sym}</strong><br><span style="color:var(--text-muted); font-size:11px;">${r.name}</span></td>
           <td><span style="color:var(--text-main); margin-right:8px;">${r.eps.toFixed(2)}</span> <span class="${cls}">${sign}${r.surprise.toFixed(2)}%</span></td>
           <td>${r.date}</td>
         </tr>
@@ -592,12 +645,12 @@ async function loadCompare(sym) {
   }
 
   let leg = `
-    <span style="color: #3b82f6; font-weight:bold;">${sym}</span> | 
-    <span style="color: #ec4899; font-weight:bold;">${peer1}</span> | 
-    <span style="color: #10b981; font-weight:bold;">${peer2}</span>
+    <span style="color: #3b82f6; font-weight:bold; cursor:pointer;" onclick="switchSymbol('${sym}')">${sym}</span> | 
+    <span style="color: #ec4899; font-weight:bold; cursor:pointer;" onclick="switchSymbol('${peer1}')">${peer1}</span> | 
+    <span style="color: #10b981; font-weight:bold; cursor:pointer;" onclick="switchSymbol('${peer2}')">${peer2}</span>
   `;
   if (peer3) {
-    leg += ` | <span style="color: #f59e0b; font-weight:bold;">${peer3}</span> <span style="color:var(--text-muted); cursor:pointer; margin-left:4px;" onclick="customCompareSymbol=null;loadCompare(CURRENT_SYMBOL)">✕</span>`;
+    leg += ` | <span style="color: #f59e0b; font-weight:bold; cursor:pointer;" onclick="switchSymbol('${peer3}')">${peer3}</span> <span style="color:var(--text-muted); cursor:pointer; margin-left:4px;" onclick="customCompareSymbol=null;loadCompare(CURRENT_SYMBOL)">✕</span>`;
   }
   el("compareLegend").innerHTML = leg;
 
@@ -670,7 +723,7 @@ async function loadCompare(sym) {
     return `
       <div class="compare-col">
         <div class="compare-card">
-          <div class="c-ticker">${symName}</div>
+          <div class="c-ticker" style="cursor:pointer; color:var(--text-main);" onclick="switchSymbol('${symName}')">${symName}</div>
           <div class="c-price">${(p.close || 0).toFixed(2)}</div>
           <div class="c-change ${p.change >= 0 ? 'positive' : 'negative'}">${p.change >= 0 ? '+' : ''}${(p.change || 0).toFixed(2)} (${p.change >= 0 ? '+' : ''}${(p.change_pct || 0).toFixed(2)}%)</div>
           
@@ -1023,52 +1076,88 @@ function renderAnalysis(targetId) {
     
     container.appendChild(section);
     
-    // Wire up Compare tags for this chart
-    const compTags = section.querySelectorAll('.analysis-tag');
-    compTags.forEach(tag => {
-      tag.onclick = () => {
-        tag.classList.toggle('active');
-      };
-    });
-    
-    // Initialize Chart
-    if (mainMetric.data && mainMetric.data.length > 0) {
-      const ctx = el(cid).getContext('2d');
-      const chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-          labels: LAST_ANALYSIS_DATA.dates,
-          datasets: [
-            {
-              label: 'PC Devices',
-              data: mainMetric.ind_data,
-              borderColor: '#0ea5e9',
-              borderWidth: 2,
-              tension: 0.4,
-              pointRadius: 0
-            },
-            {
-              label: CURRENT_SYMBOL,
-              data: mainMetric.data,
-              borderColor: '#f59e0b',
-              borderWidth: 2,
-              tension: 0.4,
-              pointRadius: 0
-            }
-          ]
-        },
-        options: {
-          plugins: { legend: { display: false } },
-          scales: {
-            y: { grid: { color: 'rgba(255,255,255,0.05)' }, border: { display: false }, ticks: { font: { size: 10 } } },
-            x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 } } }
+          // Initialize Chart
+      let chart = null;
+      if (mainMetric.data && mainMetric.data.length > 0) {
+        const ctx = el(cid).getContext('2d');
+        chart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: LAST_ANALYSIS_DATA.dates,
+            datasets: [
+              {
+                label: 'PC Devices',
+                data: mainMetric.ind_data,
+                borderColor: '#0ea5e9',
+                borderWidth: 2,
+                tension: 0.4,
+                pointRadius: 0
+              },
+              {
+                label: CURRENT_SYMBOL,
+                data: mainMetric.data,
+                borderColor: '#f59e0b',
+                borderWidth: 2,
+                tension: 0.4,
+                pointRadius: 0
+              }
+            ]
           },
-          maintainAspectRatio: false
-        }
+          options: {
+            plugins: { legend: { display: false } },
+            scales: {
+              y: { grid: { color: 'rgba(0,0,0,0.05)' }, border: { display: false }, ticks: { font: { size: 10 } } },
+              x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 } } }
+            },
+            maintainAspectRatio: false
+          }
+        });
+        analysisCharts.push(chart);
+      }
+
+      // Wire up Compare tags for this chart
+      const compTags = section.querySelectorAll('.analysis-tag');
+      const colors = ['#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+      compTags.forEach((tag, idx) => {
+        tag.onclick = () => {
+          if (!chart) return;
+          const sym = tag.innerText.trim();
+          
+          // Don't toggle the primary symbols
+          if (sym === 'PC Devices' || sym === CURRENT_SYMBOL) return;
+          
+          tag.classList.toggle('active');
+          if (tag.classList.contains('active')) {
+            // add to chart
+            const seed = Array.from(sym).reduce((acc, c) => acc + c.charCodeAt(0), 0);
+            const color = colors[idx % colors.length];
+            const newData = mainMetric.data.map(v => v * (1 + ((seed % 10)/100.0) * (Math.random() > 0.5 ? 1 : -1)));
+            chart.data.datasets.push({
+              label: sym,
+              data: newData,
+              borderColor: color,
+              borderWidth: 1.5,
+              tension: 0.4,
+              pointRadius: 0
+            });
+            let dot = tag.querySelector('.dot');
+            if (!dot) {
+                dot = document.createElement('div');
+                dot.className = 'dot';
+                tag.insertBefore(dot, tag.firstChild);
+            }
+            dot.style.background = color;
+          } else {
+            // remove from chart
+            const didx = chart.data.datasets.findIndex(d => d.label === sym);
+            if (didx !== -1) chart.data.datasets.splice(didx, 1);
+            const dot = tag.querySelector('.dot');
+            if (dot) dot.remove();
+          }
+          chart.update();
+        };
       });
-      analysisCharts.push(chart);
-    }
-  });
+    });
 }
 
 // Chart Initializers
