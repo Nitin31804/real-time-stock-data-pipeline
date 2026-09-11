@@ -9,10 +9,11 @@ logger = logging.getLogger("dashboard.core.db")
 # Connection Pool
 db_pool = None
 
+
 def get_pool():
     global db_pool
     if db_pool is None:
-        logger.info("dY"" Initializing PostgreSQL Connection Pool...")
+        logger.info("dY" " Initializing PostgreSQL Connection Pool...")
         db_pool = ThreadedConnectionPool(
             minconn=1,
             maxconn=10,
@@ -23,13 +24,16 @@ def get_pool():
         )
     return db_pool
 
+
 def get_db_connection():
     pool = get_pool()
     return pool.getconn()
 
+
 def release_db_connection(conn):
     pool = get_pool()
     pool.putconn(conn)
+
 
 def query_one(sql: str, params: tuple = ()):
     conn = get_db_connection()
@@ -40,6 +44,7 @@ def query_one(sql: str, params: tuple = ()):
     finally:
         release_db_connection(conn)
 
+
 def query_all(sql: str, params: tuple = ()):
     conn = get_db_connection()
     try:
@@ -49,7 +54,10 @@ def query_all(sql: str, params: tuple = ()):
     finally:
         release_db_connection(conn)
 
+
 def serialize_row(row):
     if not row:
         return row
-    return {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in row.items()}
+    return {
+        k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in row.items()
+    }

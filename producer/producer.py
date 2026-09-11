@@ -33,24 +33,27 @@ logger = logging.getLogger("stock-producer")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
-KAFKA_TOPIC             = os.getenv("KAFKA_TOPIC", "stock.raw-ticks.v1")
-KAFKA_DLQ_TOPIC         = os.getenv("KAFKA_DLQ_TOPIC", "stock.dlq.v1")
-FINNHUB_API_KEY         = os.getenv("FINNHUB_API_KEY", "").strip()
-STOCK_SYMBOLS           = [s.strip() for s in os.getenv("STOCK_SYMBOLS", "AAPL,GOOGL,MSFT,AMZN,TSLA").split(",")]
-TICK_INTERVAL_MS        = int(os.getenv("TICK_INTERVAL_MS", "100"))
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "stock.raw-ticks.v1")
+KAFKA_DLQ_TOPIC = os.getenv("KAFKA_DLQ_TOPIC", "stock.dlq.v1")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
+STOCK_SYMBOLS = [
+    s.strip()
+    for s in os.getenv("STOCK_SYMBOLS", "AAPL,GOOGL,MSFT,AMZN,TSLA").split(",")
+]
+TICK_INTERVAL_MS = int(os.getenv("TICK_INTERVAL_MS", "100"))
 
 # Realistic seed prices for the GBM mock generator
 SEED_PRICES = {
-    "AAPL":  185.50,
+    "AAPL": 185.50,
     "GOOGL": 175.20,
-    "MSFT":  415.80,
-    "AMZN":  195.40,
-    "TSLA":  245.30,
-    "NVDA":  875.60,
-    "META":  505.20,
-    "NFLX":  640.90,
-    "AMD":   165.40,
-    "INTC":  32.50,
+    "MSFT": 415.80,
+    "AMZN": 195.40,
+    "TSLA": 245.30,
+    "NVDA": 875.60,
+    "META": 505.20,
+    "NFLX": 640.90,
+    "AMD": 165.40,
+    "INTC": 32.50,
 }
 
 
@@ -59,7 +62,7 @@ def ensure_topics_exist():
     """Create Kafka topics if they don't already exist."""
     admin = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
     topics_to_create = [
-        NewTopic(KAFKA_TOPIC,     num_partitions=4, replication_factor=1),
+        NewTopic(KAFKA_TOPIC, num_partitions=4, replication_factor=1),
         NewTopic(KAFKA_DLQ_TOPIC, num_partitions=1, replication_factor=1),
     ]
     futures = admin.create_topics(topics_to_create)
@@ -68,7 +71,10 @@ def ensure_topics_exist():
             future.result()
             logger.info(f"✅ Topic created: {topic}")
         except Exception as e:
-            if "already exists" in str(e).lower() or "topic already exists" in str(e).lower():
+            if (
+                "already exists" in str(e).lower()
+                or "topic already exists" in str(e).lower()
+            ):
                 logger.info(f"ℹ️  Topic already exists: {topic}")
             else:
                 logger.warning(f"⚠️  Could not create topic {topic}: {e}")
@@ -78,12 +84,12 @@ def ensure_topics_exist():
 def build_kafka_producer() -> Producer:
     config = {
         "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
-        "acks":              "all",
-        "retries":           5,
-        "retry.backoff.ms":  500,
-        "compression.type":  "snappy",
-        "linger.ms":         10,
-        "batch.size":        16384,
+        "acks": "all",
+        "retries": 5,
+        "retry.backoff.ms": 500,
+        "compression.type": "snappy",
+        "linger.ms": 10,
+        "batch.size": 16384,
     }
     return Producer(config)
 
@@ -103,7 +109,7 @@ def publish_tick(producer: Producer, tick: dict):
             value=payload,
             callback=delivery_report,
         )
-        producer.poll(0)   # trigger callbacks without blocking
+        producer.poll(0)  # trigger callbacks without blocking
     except Exception as e:
         logger.error(f"Publish error: {e}")
 
@@ -118,13 +124,12 @@ class GBMMockGenerator:
 
     def __init__(self, symbols: list[str], dt: float = 1 / (252 * 6.5 * 3600)):
         self.symbols = symbols
-        self.dt      = dt   # time step ≈ 1 second in trading-year units
-        self.mu      = 0.12  # annual drift  ~12%
-        self.sigma   = 0.25  # annual vol    ~25%
+        self.dt = dt  # time step ≈ 1 second in trading-year units
+        self.mu = 0.12  # annual drift  ~12%
+        self.sigma = 0.25  # annual vol    ~25%
         # Initialise prices from seed dict or random reasonable range
-        self.prices  = {
-            s: SEED_PRICES.get(s, round(random.uniform(50, 500), 2))
-            for s in symbols
+        self.prices = {
+            s: SEED_PRICES.get(s, round(random.uniform(50, 500), 2)) for s in symbols
         }
         self.volumes = {s: random.randint(50_000, 500_000) for s in symbols}
         logger.info(f"📊 GBM Mock Generator initialised for: {', '.join(symbols)}")
@@ -133,11 +138,11 @@ class GBMMockGenerator:
 
     def next_tick(self, symbol: str) -> dict:
         """Generate the next price tick using GBM step."""
-        S   = self.prices[symbol]
+        S = self.prices[symbol]
         eps = np.random.standard_normal()
         # GBM discrete step
         S_new = S * math.exp(
-            (self.mu - 0.5 * self.sigma ** 2) * self.dt
+            (self.mu - 0.5 * self.sigma**2) * self.dt
             + self.sigma * math.sqrt(self.dt) * eps
         )
         # Clamp to prevent negative or absurd prices
@@ -149,14 +154,14 @@ class GBMMockGenerator:
         vol = max(1, int(np.random.exponential(scale=300)))
 
         return {
-            "event_id":         str(uuid.uuid4()),
-            "symbol":           symbol,
-            "price":            S_new,
-            "volume":           vol,
-            "timestamp":        datetime.now(timezone.utc).isoformat(),
-            "exchange":         "MOCK",
+            "event_id": str(uuid.uuid4()),
+            "symbol": symbol,
+            "price": S_new,
+            "volume": vol,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "exchange": "MOCK",
             "trade_conditions": ["SIMULATED"],
-            "source":           "gbm_mock",
+            "source": "gbm_mock",
         }
 
     def run(self, producer: Producer, interval_ms: int):
@@ -167,7 +172,9 @@ class GBMMockGenerator:
             for symbol in self.symbols:
                 tick = self.next_tick(symbol)
                 publish_tick(producer, tick)
-                logger.debug(f"[GBM] {tick['symbol']} → ${tick['price']:.4f} vol={tick['volume']}")
+                logger.debug(
+                    f"[GBM] {tick['symbol']} → ${tick['price']:.4f} vol={tick['volume']}"
+                )
             time.sleep(interval_s)
 
 
@@ -179,10 +186,10 @@ class FinnhubProducer:
     """
 
     def __init__(self, api_key: str, symbols: list[str], producer: Producer):
-        self.api_key  = api_key
-        self.symbols  = symbols
+        self.api_key = api_key
+        self.symbols = symbols
         self.producer = producer
-        self._ws      = None
+        self._ws = None
         self._running = False
 
     def _on_message(self, ws, message):
@@ -192,20 +199,21 @@ class FinnhubProducer:
                 return
             for trade in data.get("data", []):
                 tick = {
-                    "event_id":         str(uuid.uuid4()),
-                    "symbol":           trade.get("s", "UNKNOWN"),
-                    "price":            float(trade.get("p", 0)),
-                    "volume":           int(trade.get("v", 0)),
-                    "timestamp":        datetime.fromtimestamp(
-                                            trade.get("t", time.time() * 1000) / 1000,
-                                            tz=timezone.utc
-                                        ).isoformat(),
-                    "exchange":         "FINNHUB",
+                    "event_id": str(uuid.uuid4()),
+                    "symbol": trade.get("s", "UNKNOWN"),
+                    "price": float(trade.get("p", 0)),
+                    "volume": int(trade.get("v", 0)),
+                    "timestamp": datetime.fromtimestamp(
+                        trade.get("t", time.time() * 1000) / 1000, tz=timezone.utc
+                    ).isoformat(),
+                    "exchange": "FINNHUB",
                     "trade_conditions": trade.get("c", []),
-                    "source":           "finnhub",
+                    "source": "finnhub",
                 }
                 publish_tick(self.producer, tick)
-                logger.info(f"[Finnhub] {tick['symbol']} → ${tick['price']:.4f} vol={tick['volume']}")
+                logger.info(
+                    f"[Finnhub] {tick['symbol']} → ${tick['price']:.4f} vol={tick['volume']}"
+                )
         except Exception as e:
             logger.error(f"Message parse error: {e}")
 
@@ -224,6 +232,7 @@ class FinnhubProducer:
 
     def run(self):
         import websocket  # imported here to avoid hard dep when not in finnhub mode
+
         self._running = True
         while True:
             url = f"wss://ws.finnhub.io?token={self.api_key}"
@@ -255,8 +264,12 @@ def main():
     logger.info("⏳ Waiting for Kafka to be ready...")
     while True:
         try:
-            admin = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
-                                 "socket.timeout.ms": 5000})
+            admin = AdminClient(
+                {
+                    "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
+                    "socket.timeout.ms": 5000,
+                }
+            )
             meta = admin.list_topics(timeout=5)
             if meta:
                 logger.info("✅ Kafka is ready.")
