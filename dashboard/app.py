@@ -1341,6 +1341,7 @@ def api_company_info(symbol: str):
         if not info or not info.get("sector"):
             raise ValueError("yfinance returned empty info")
 
+        ticker = get_yf_ticker(yf_sym)
         df = ticker.institutional_holders
         holders = []
         if df is not None and not df.empty:
