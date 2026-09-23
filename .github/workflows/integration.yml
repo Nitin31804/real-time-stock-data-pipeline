@@ -24,7 +24,7 @@ jobs:
       - name: Run end-to-end assertion
         env:
           RUN_PIPELINE_INTEGRATION: "1"
-        run: python -m pytest -m integration -v
+        run: python -m pytest tests/integration -m integration -v
       - name: Capture dashboard screenshot
         if: always()
         continue-on-error: true
