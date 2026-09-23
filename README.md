@@ -44,6 +44,15 @@ flowchart LR
 The local Kafka broker uses replication factor 1 and Spark defaults to `local[2]`.
 Those choices keep the demo affordable; they do not provide production fault tolerance.
 
+## Verified dashboard
+
+![Simulation dashboard with rendered AAPL candle data and healthy pipeline services](docs/dashboard.png)
+
+This screenshot is captured automatically after the end-to-end workflow sends ticks
+through Kafka, finalizes a one-minute candle in Spark, verifies it in PostgreSQL, and
+loads the Flask dashboard. The yellow disclosure is intentional: generated prices are
+always identified as simulation data.
+
 ## Quick start
 
 Requirements:
