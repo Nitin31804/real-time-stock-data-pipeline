@@ -10,10 +10,9 @@ let tabDataAbortController = null;
 // Charts
 let summaryChart, summarySeries, summaryVolSeries;
 let fullChart, fullCandleSeries, fullVolSeries;
-let analystGauge, earnAnalystGauge, peBarChart, epsBarChart, compareChart;
+let analystGauge, peBarChart, compareChart;
 let compareSeriesBase, compareSeriesPeer1, compareSeriesPeer2, compareSeriesPeer3;
 let customCompareSymbol = null;
-let LAST_EARNINGS_DATA = null;
 
 window.addCustomCompare = function() {
   const t = prompt("Enter a stock ticker to compare (e.g. TSLA, NVDA, AMZN):");
@@ -26,12 +25,35 @@ window.addCustomCompare = function() {
 // Init
 async function init() {
   await fetchTickers();
+  await loadPipelineHealth();
   initCharts();
   initTabs();
   initSubTabs();
   initSearch();
   switchSymbol(CURRENT_SYMBOL);
   setInterval(fetchTickers, 60000);
+  setInterval(loadPipelineHealth, 10000);
+}
+
+async function loadPipelineHealth() {
+  const container = el('pipelineHealth');
+  if (!container) return;
+  try {
+    const [healthResponse, lagResponse] = await Promise.all([
+      fetch('/api/health'),
+      fetch('/api/consumer-lag')
+    ]);
+    const health = healthResponse.ok ? await healthResponse.json() : { services: [] };
+    const lag = lagResponse.ok ? await lagResponse.json() : { consumer_lag: null };
+    const chips = (health.services || []).map(service =>
+      `<span class="health-chip ${service.status}">${service.service}: ${service.status}</span>`
+    );
+    const lagLabel = lag.consumer_lag === null ? 'lag: unavailable' : `lag: ${Math.round(lag.consumer_lag)}`;
+    chips.push(`<span class="health-chip ${lag.consumer_lag === null ? 'pending' : 'ok'}">${lagLabel}</span>`);
+    container.innerHTML = chips.join('');
+  } catch (error) {
+    container.innerHTML = '<span class="health-chip error">health unavailable</span>';
+  }
 }
 
 // Fetch Watchlist
@@ -158,36 +180,6 @@ async function handleTimeframeChange(tf) {
     };
   });
   
-  // Earnings Tabs
-  const btnEarnEps = el('btnEarnEps');
-  const btnEarnRev = el('btnEarnRev');
-  if (btnEarnEps && btnEarnRev) {
-    btnEarnEps.onclick = () => {
-      btnEarnEps.classList.add('active');
-      btnEarnRev.classList.remove('active');
-      renderEarningsChart('eps');
-    };
-    btnEarnRev.onclick = () => {
-      btnEarnRev.classList.add('active');
-      btnEarnEps.classList.remove('active');
-      renderEarningsChart('rev');
-    };
-  }
-  
-  const btnRelRep = el('btnRelRep');
-  const btnRelFcst = el('btnRelFcst');
-  if (btnRelRep && btnRelFcst) {
-    btnRelRep.onclick = () => {
-      btnRelRep.classList.add('active');
-      btnRelFcst.classList.remove('active');
-      renderRelatedEarn('rep');
-    };
-    btnRelFcst.onclick = () => {
-      btnRelFcst.classList.add('active');
-      btnRelRep.classList.remove('active');
-      renderRelatedEarn('fcst');
-    };
-  }
 }
 
 // Search
@@ -239,7 +231,7 @@ window.selectSearch = function(symbol) {
 async function switchSymbol(sym) {
   CURRENT_SYMBOL = sym.toUpperCase();
   el("headerName").innerText = CURRENT_SYMBOL;
-  el("headerSymbol").innerText = `NASDAQ: ${CURRENT_SYMBOL}`;
+  el("headerSymbol").innerText = CURRENT_SYMBOL;
   
   // Re-connect SSE stream
   if (eventSource) eventSource.close();
@@ -249,42 +241,9 @@ async function switchSymbol(sym) {
   // Load data for all tabs
   loadFundamentals(CURRENT_SYMBOL);
   loadNews(CURRENT_SYMBOL);
-  loadAnalysis(CURRENT_SYMBOL);
+  loadFinancials(CURRENT_SYMBOL);
   loadCompanyInfo(CURRENT_SYMBOL);
-  loadEarnings(CURRENT_SYMBOL);
   loadCompare(CURRENT_SYMBOL);
-  
-  // Initialize Tier 1 Financials tabs (Income Statement, Balance Sheet, Cash Flow)
-  const finTier1Tabs = document.querySelectorAll('#tab-financials .fin-tier1-tab');
-  if (finTier1Tabs.length > 0) {
-    finTier1Tabs.forEach(tab => {
-      tab.onclick = () => {
-        finTier1Tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        if (tab.dataset.target === 'income-statement') {
-          renderIncomeStatement();
-        } else {
-          if (isChart) { isChart.destroy(); isChart = null; }
-          el('financialsContainer').innerHTML = `<div class="mt-4 p-4" style="text-align:center; color:var(--text-muted)">${tab.innerText} data not available.</div>`;
-        }
-      };
-    });
-  }
-
-  // Initialize Tier 1 Analysis tabs (Key Ratios)
-  const anaTier1Tabs = document.querySelectorAll('#tab-analysis .fin-tier1-tab');
-  if (anaTier1Tabs.length > 0) {
-    anaTier1Tabs.forEach(tab => {
-      tab.onclick = () => {
-        anaTier1Tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        if (tab.dataset.target === 'key-ratios') {
-          renderKeyRatiosShell();
-          renderAnalysis('all');
-        }
-      };
-    });
-  }
   
   // Load historical candles
   const res = await fetch(`/api/candles/${CURRENT_SYMBOL}?limit=120`);
@@ -356,7 +315,7 @@ async function loadFundamentals(sym) {
   const val = score >= 0 ? (4 - score)*25 : 50; 
   updateGauge(val);
   
-  peBarChart.data.datasets[0].data = [d.trailingPE || 15, 25, 30, 20];
+  peBarChart.data.datasets[0].data = [d.trailingPE || null];
   peBarChart.update();
 }
 
@@ -368,7 +327,8 @@ async function loadNews(sym) {
   if(!container) return;
   
   container.innerHTML = news.map(n => {
-    const timeStr = new Date(n.time * 1000).toLocaleDateString();
+    const timestamp = typeof n.time === 'number' ? n.time * 1000 : n.time;
+    const timeStr = timestamp ? new Date(timestamp).toLocaleDateString() : 'Date unavailable';
     return `
       <a href="${n.link}" target="_blank" class="news-card">
         <div class="news-img" style="background-image: url('${n.thumbnail}')"></div>
@@ -383,8 +343,15 @@ async function loadNews(sym) {
 
 async function loadFinancials(sym) {
   const res = await fetch(`/api/financials/${sym}`);
-  if(!res.ok) return;
-  const d = await res.json();
+  if(!res.ok) {
+    const container = el('financialsContainer');
+    if (container) {
+      container.innerHTML = '<div class="data-unavailable">Verified financial statements are unavailable from the configured provider.</div>';
+    }
+    return;
+  }
+  const payload = await res.json();
+  const d = payload.periods || payload;
   
   const years = Object.keys(d).sort();
   if(years.length === 0) return;
@@ -435,173 +402,6 @@ async function loadCompanyInfo(sym) {
       <td>${(h.pct * 100).toFixed(2)}%</td>
     </tr>
   `).join('');
-}
-
-async function loadEarnings(sym) {
-  const [resE, resF] = await Promise.all([
-    fetch(`/api/earnings/${sym}`),
-    fetch(`/api/summary_fundamentals/${sym}`)
-  ]);
-  
-  if(!resE.ok || !resF.ok) return;
-  const d = await resE.json();
-  const f = await resF.json();
-  
-  // 1. Upcoming Earnings Announcement
-  if(d.upcoming) {
-    el("earnUpDate").innerText = d.upcoming.date;
-    el("earnUpDays").innerText = d.upcoming.days;
-    el("fcEps").innerText = d.upcoming.forecast_eps.toFixed(2);
-    el("fcLastEps").innerText = d.upcoming.last_eps.toFixed(2);
-    el("fcRev").innerText = d.upcoming.forecast_rev;
-    el("fcLastRev").innerText = d.upcoming.last_rev;
-  }
-  
-  // 2. Performance
-  const wk52 = f.fiftyTwoWeekChange ? (f.fiftyTwoWeekChange * 100).toFixed(2) + '%' : '-';
-  const perfData = f.performance || ["-", "-", "-", wk52, "-"];
-  const labels = ["1 Month", "6 Month", "YTD", "1 Year", "3 Year"];
-  el("earnPerfContainer").innerHTML = perfData.map((val, i) => {
-    if (val === '-') return `<div class="perf-row"><div class="perf-label">${labels[i]}</div><div class="perf-bar-bg"></div><div class="perf-val">-</div></div>`;
-    const num = parseFloat(val);
-    const w = Math.min(Math.abs(num), 100) + '%';
-    const cls = num >= 0 ? 'perf-positive' : 'perf-negative';
-    return `
-      <div class="perf-row ${cls}">
-        <div class="perf-label">${labels[i]}</div>
-        <div class="perf-bar-bg">
-          <div class="perf-bar-fill" style="width: ${w};">${val}</div>
-        </div>
-        <div class="perf-val">${val}</div>
-      </div>
-    `;
-  }).join('');
-  
-  // 3. Analyst Recommendation
-  el("analystCount").innerText = f.analystCount || '47';
-  el("analystDate").innerText = '23/7/2026';
-  el("analystTargetCount").innerText = f.analystCount || '43';
-  el("volDate").innerText = '20/7/2026';
-  el("indDate").innerText = '23/7/2026';
-  
-  el("analystMainRec").innerText = f.recommendation || 'Hold';
-  el("analystMainRec").className = `analyst-main-rec ${f.recommendation === 'Buy' || f.recommendation === 'Strong Buy' ? 'positive' : (f.recommendation === 'Hold' ? '' : 'negative')}`;
-  el("analystTarget").innerText = f.targetMeanPrice ? 'USD ' + f.targetMeanPrice.toFixed(2) : '--';
-  
-  const score = ['Strong Buy', 'Buy', 'Hold', 'Sell', 'Strong Sell'].indexOf(f.recommendation);
-  const val = score >= 0 ? (4 - score)*25 : 50; 
-  
-  const bg = val > 60 ? '#10b981' : val < 40 ? '#ef4444' : '#f59e0b';
-  earnAnalystGauge.data.datasets[0].data = [val, 100 - val, 0];
-  earnAnalystGauge.data.datasets[0].backgroundColor = [bg, '#334155', '#334155'];
-  earnAnalystGauge.update();
-  
-  const breakdownLabels = ["Strong Buy", "Buy", "Hold", "Sell", "Strong Sell"];
-  const breakdownVals = [23, 6, 14, 2, 2];
-  const total = 47;
-  
-  el("analystBreakdown").innerHTML = breakdownLabels.map((l, i) => {
-    const v = breakdownVals[i];
-    const pct = (v / total) * 100;
-    const cl = (i < 2) ? '#10b981' : (i === 2) ? '#84cc16' : '#ef4444';
-    return `
-      <div class="ab-row">
-        <div class="ab-label">${l}</div>
-        <div class="ab-bar-bg">
-          <div class="ab-bar-fill" style="width: ${pct}%; background: ${cl};"></div>
-        </div>
-        <div class="ab-val">${v}</div>
-      </div>
-    `;
-  }).join('');
-  
-  LAST_EARNINGS_DATA = d;
-  
-  // 4. Earnings Per Share Chart
-  const isRev = el('btnEarnRev') && el('btnEarnRev').classList.contains('active');
-  renderEarningsChart(isRev ? 'rev' : 'eps');
-  
-  // 5. Earnings History Table
-  const tbody = el('earningsHistoryBody');
-  const hist = d.history || [];
-  tbody.innerHTML = hist.map(x => {
-    const parts = x.date.split('-');
-    const q = Math.ceil(parseInt(parts[1])/3);
-    const fq = `${parts[0]}Q${q}`;
-    const surpCls = x.surprise > 0 ? 'positive' : 'negative';
-    const sign = x.surprise > 0 ? '+' : '';
-    const lastYearEps = x.estimate ? (x.estimate * 0.8).toFixed(2) : '--';
-    const surpPct = x.surprise ? (x.surprise * 100).toFixed(2) + '%' : '--';
-    const surpAbs = x.surprise ? x.surprise.toFixed(3) : '';
-    
-    return `
-      <tr>
-        <td>${x.date}</td>
-        <td>${fq}</td>
-        <td>${x.estimate ? x.estimate.toFixed(2) : '--'} / ${x.reported ? x.reported.toFixed(2) : '--'}</td>
-        <td>${lastYearEps}</td>
-        <td class="${surpCls}">${surpPct} (${sign}${surpAbs})</td>
-      </tr>
-    `;
-  }).join('');
-  
-  // 6. Related Companies
-  const isFcst = el('btnRelFcst') && el('btnRelFcst').classList.contains('active');
-  renderRelatedEarn(isFcst ? 'fcst' : 'rep');
-}
-
-function renderEarningsChart(mode) {
-  if (!LAST_EARNINGS_DATA) return;
-  const hist = LAST_EARNINGS_DATA.history || [];
-  const dRev = [...hist].reverse();
-  
-  epsBarChart.data.labels = dRev.map(x => {
-    const parts = x.date.split('-');
-    const q = Math.ceil(parseInt(parts[1])/3);
-    return `${parts[0]}Q${q}`;
-  });
-  
-  if (mode === 'eps') {
-    epsBarChart.data.datasets[0].label = 'Estimate EPS';
-    epsBarChart.data.datasets[1].label = 'Reported EPS';
-    epsBarChart.data.datasets[0].data = dRev.map(x => x.estimate);
-    epsBarChart.data.datasets[1].data = dRev.map(x => x.reported);
-  } else {
-    epsBarChart.data.datasets[0].label = 'Estimate Rev (B)';
-    epsBarChart.data.datasets[1].label = 'Reported Rev (B)';
-    // Mocking revenue based on EPS just to show it works
-    epsBarChart.data.datasets[0].data = dRev.map(x => x.estimate ? (x.estimate * 12.5).toFixed(1) : 0);
-    epsBarChart.data.datasets[1].data = dRev.map(x => x.reported ? (x.reported * 12.5).toFixed(1) : 0);
-  }
-  epsBarChart.update();
-}
-
-function renderRelatedEarn(mode) {
-  if (!LAST_EARNINGS_DATA) return;
-  const rel = LAST_EARNINGS_DATA.related || [];
-  
-  el("relatedEarnBody").innerHTML = rel.map(r => {
-    if (mode === 'rep') {
-      const cls = r.surprise > 0 ? 'positive' : 'negative';
-      const sign = r.surprise > 0 ? '+' : '';
-      return `
-        <tr>
-          <td><strong style="cursor:pointer; color:var(--text-main);" onclick="switchSymbol('${r.sym}')">${r.sym}</strong><br><span style="color:var(--text-muted); font-size:11px;">${r.name}</span></td>
-          <td><span style="color:var(--text-main); margin-right:8px;">${r.eps.toFixed(2)}</span> <span class="${cls}">${sign}${r.surprise.toFixed(2)}%</span></td>
-          <td>${r.date}</td>
-        </tr>
-      `;
-    } else {
-      const fcst = (r.eps * 0.95).toFixed(2);
-      return `
-        <tr>
-          <td><strong>${r.sym}</strong><br><span style="color:var(--text-muted); font-size:11px;">${r.name}</span></td>
-          <td><span style="color:var(--text-main); margin-right:8px;">${fcst}</span> <span style="font-size:11px; color:var(--text-muted);">(Fcst)</span></td>
-          <td>${r.date}</td>
-        </tr>
-      `;
-    }
-  }).join('');
 }
 
 async function loadCompare(sym) {
@@ -667,27 +467,6 @@ async function loadCompare(sym) {
     `;
   };
 
-  const STATIC_MOCKS = {
-    "AAPL": {
-      p: { close: 333.02, change: 11.36, change_pct: 3.53 },
-      range: "201.50 - 334.99", rec: "Buy", target: "318.81", cap: "4.89T", div: "0.34%",
-      perf: ["21.03%", "34.26%", "22.50%", "55.70%", "70.06%"],
-      stat: ["416.16B", "112.01B", "2.01", "39.07", "Above", "1.07"]
-    },
-    "MSFT": {
-      p: { close: 381.70, change: 0.12, change_pct: 0.03 },
-      range: "349.20 - 555.45", rec: "Strong Buy", target: "558.21", cap: "2.84T", div: "0.95%",
-      perf: ["8.18%", "-18.08%", "-21.07%", "-25.70%", "12.81%"],
-      stat: ["281.72B", "101.83B", "4.27", "22.73", "Below", "1.12"]
-    },
-    "GOOGL": {
-      p: { close: 319.09, change: 0.75, change_pct: 0.24 },
-      range: "188.70 - 404.47", rec: "Strong Buy", target: "427.77", cap: "3.90T", div: "0.28%",
-      perf: ["-6.75%", "-2.84%", "1.69%", "64.41%", "139.90%"],
-      stat: ["402.84B", "132.17B", "9.11", "16.00", "Below", "1.26"]
-    }
-  };
-
   const getCardHtml = (symName, p_live, f, i, isPlaceholder) => {
     if (isPlaceholder) {
       return `
@@ -699,13 +478,12 @@ async function loadCompare(sym) {
       `;
     }
     
-    const mock = STATIC_MOCKS[symName];
-    const p = mock ? mock.p : p_live;
-    const range = mock ? mock.range : `${f.fiftyTwoWeekLow||0} - ${f.fiftyTwoWeekHigh||0}`;
-    const rec = mock ? mock.rec : (f.recommendation||'Hold');
-    const target = mock ? mock.target : (f.targetMeanPrice||'-');
-    const cap = mock ? mock.cap : formatNumber(f.marketCap);
-    const div = mock ? mock.div : `${((f.dividendYield||0)*100).toFixed(2)}%`;
+    const p = p_live;
+    const range = `${f.fiftyTwoWeekLow||0} - ${f.fiftyTwoWeekHigh||0}`;
+    const rec = f.recommendation||'Unavailable';
+    const target = f.targetMeanPrice||'-';
+    const cap = formatNumber(f.marketCap);
+    const div = `${((f.dividendYield||0)*100).toFixed(2)}%`;
     
     const pFifty = f.fiftyDayAverage;
     const pAvgStatus = pFifty ? (p.close > pFifty ? 'Above' : 'Below') : '-';
@@ -715,8 +493,8 @@ async function loadCompare(sym) {
     const beta = f.beta ? f.beta.toFixed(2) : '-';
     const wk52 = f.fiftyTwoWeekChange ? (f.fiftyTwoWeekChange * 100).toFixed(2) + '%' : '-';
 
-    const perf = mock ? mock.perf : (f.performance || ["-", "-", "-", wk52, "-"]);
-    const stat = mock ? mock.stat : [rev, net, eps, f.trailingPE||'-', pAvgStatus, beta];
+    const perf = f.performance || ["-", "-", "-", wk52, "-"];
+    const stat = [rev, net, eps, f.trailingPE||'-', pAvgStatus, beta];
     
     const perfClass = (val) => (val && val.includes('-')) ? 'negative' : 'positive';
     
@@ -820,347 +598,6 @@ async function loadCompare(sym) {
   el('compareGrid').innerHTML = gridHtml;
 }
 
-let LAST_ANALYSIS_DATA = null;
-let analysisCharts = [];
-
-async function loadAnalysis(sym) {
-  const res = await fetch(`/api/analysis/${sym}`);
-  if(!res.ok) return;
-  LAST_ANALYSIS_DATA = await res.json();
-  
-  // Render both layouts into their respective tabs
-  renderKeyRatiosShell();
-  renderAnalysis('all');
-  renderIncomeStatement();
-}
-
-function renderKeyRatiosShell() {
-  const container = el('analysisShellContainer');
-  if (!container) return;
-  container.innerHTML = `
-    <!-- Tier 2 Nav -->
-    <div class="fin-sub-tabs mt-3">
-      <button class="fin-sub-tab active" data-target="all">All</button>
-      <button class="fin-sub-tab" data-target="per-share">Per Share Values</button>
-      <button class="fin-sub-tab" data-target="growth">Growth Rates</button>
-      <button class="fin-sub-tab" data-target="profit">Profitability</button>
-      <button class="fin-sub-tab" data-target="valuation">Valuation</button>
-      <button class="fin-sub-tab" data-target="leverage">Leverage & Liquidity</button>
-      <button class="fin-sub-tab" data-target="efficiency">Efficiency</button>
-    </div>
-    
-    <!-- Tier 3 Nav -->
-    <div class="fin-period-tabs mt-4">
-      <button class="fin-period-tab active">Annual</button>
-      <button class="fin-period-tab">Quarterly</button>
-    </div>
-    
-    <!-- Analysis Content Container -->
-    <div id="analysisContentContainer" class="mt-4">
-      <!-- Dynamically populated via JS -->
-    </div>
-  `;
-  
-  // Wire up the tier 2 sub-tabs
-  const subTabs = container.querySelectorAll('.fin-sub-tab');
-  subTabs.forEach(tab => {
-    tab.onclick = () => {
-      subTabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      renderAnalysis(tab.dataset.target);
-    };
-  });
-  
-  // Wire up Annual/Quarterly toggles
-  const periodTabs = container.querySelectorAll('.fin-period-tab');
-  periodTabs.forEach(tab => {
-    tab.onclick = () => {
-      periodTabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-    };
-  });
-}
-
-let isChart = null;
-
-function renderIncomeStatement() {
-  const container = el('financialsContainer');
-  if (!container || !LAST_ANALYSIS_DATA || !LAST_ANALYSIS_DATA.income_statement) return;
-  
-  const inc = LAST_ANALYSIS_DATA.income_statement;
-  const years = inc.years;
-  
-  // Destroy old chart if exists
-  if (isChart) { isChart.destroy(); isChart = null; }
-  
-  const thead = `<tr>
-    <th style="text-align:left;">Fiscal year ends 27 Sept</th>
-    ${years.map(y => `<th style="text-align:right;">${y}</th>`).join('')}
-  </tr>`;
-  
-  const tbody = inc.rows.map(row => {
-    const isHeader = row.name.includes('%') || row.name === "Margin Analysis";
-    if (row.name === "Margin Analysis") {
-      return `<tr><td colspan="9" style="padding-top:24px; font-weight:600; font-size:14px; color:var(--text-main); border-bottom:none;">${row.name}</td></tr>`;
-    }
-    
-    const cells = row.values.map(v => {
-      const g = v.growth ? parseFloat(v.growth) : null;
-      const gCls = g !== null && g > 0 ? 'positive' : (g !== null && g < 0 ? 'negative' : '');
-      const gSign = g !== null && g > 0 ? '+' : '';
-      return `
-        <td style="text-align:right;">
-          <div style="color:var(--text-main); font-weight:500;">${v.val}</div>
-          ${v.growth ? `<div class="t-sub ${gCls}">${gSign}${v.growth}</div>` : ''}
-        </td>
-      `;
-    }).join('');
-    
-    return `
-      <tr>
-        <td style="text-align:left;">
-          <div style="color:var(--text-main); font-weight:500;">${row.name} ${row.info ? '<i class="fas fa-info-circle" style="color:var(--text-muted); font-size:10px; margin-left:4px;"></i>' : ''}</div>
-          ${row.subtitle ? `<div class="t-sub">${row.subtitle}</div>` : ''}
-        </td>
-        ${cells}
-      </tr>
-    `;
-  }).join('');
-  
-  container.innerHTML = `
-    <!-- Tier 3 Nav -->
-    <div class="fin-period-tabs mt-4">
-      <button class="fin-period-tab active">Annual</button>
-      <button class="fin-period-tab">Quarterly</button>
-    </div>
-    
-    <div class="analysis-canvas-container mt-4" style="height:250px;">
-      <canvas id="incChart"></canvas>
-    </div>
-    
-    <div class="analysis-compare-footer mt-4 pb-4" style="border-bottom: 1px solid var(--border);">
-       <div style="display:flex; align-items:center; gap:4px;"><i class="fas fa-search"></i> Compare</div>
-       <div class="analysis-compare-tags">
-         <div class="analysis-tag active"><div class="dot" style="background:#0ea5e9;"></div> MSFT</div>
-         <div class="analysis-tag">GOOG</div>
-         <div class="analysis-tag">AMZN</div>
-         <div class="analysis-tag">META</div>
-         <div class="analysis-tag">NVDA</div>
-       </div>
-    </div>
-    
-    <div class="table-container mt-4">
-      <table class="analysis-table" style="width:100%;">
-        <thead>${thead}</thead>
-        <tbody>${tbody}</tbody>
-      </table>
-    </div>
-  `;
-  
-  // Wire up Annual/Quarterly toggles
-  const periodTabs = container.querySelectorAll('.fin-period-tab');
-  periodTabs.forEach(tab => {
-    tab.onclick = () => {
-      periodTabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-    };
-  });
-
-  // Wire up Compare tags
-  const compTags = container.querySelectorAll('.analysis-tag');
-  compTags.forEach(tag => {
-    tag.onclick = () => {
-      tag.classList.toggle('active');
-    };
-  });
-  
-  // Initialize Chart
-  const ctx = el('incChart').getContext('2d');
-  isChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: years.slice().reverse(),
-      datasets: [
-        { label: 'Revenue', data: inc.chart.revenue.slice().reverse(), borderColor: '#0ea5e9', borderWidth: 2, tension: 0.4, pointRadius: 0 },
-        { label: 'Operating Expense', data: inc.chart.opex.slice().reverse(), borderColor: '#f59e0b', borderWidth: 2, tension: 0.4, pointRadius: 0 },
-        { label: 'Operating Income', data: inc.chart.opinc.slice().reverse(), borderColor: '#ec4899', borderWidth: 2, tension: 0.4, pointRadius: 0 }
-      ]
-    },
-    options: {
-      plugins: { legend: { position: 'bottom', labels: { boxWidth: 8, usePointStyle: true } } },
-      scales: {
-        y: { grid: { color: 'rgba(255,255,255,0.05)' }, border: { display: false }, ticks: { font: { size: 10 } } },
-        x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 } } }
-      },
-      maintainAspectRatio: false
-    }
-  });
-}
-
-function renderAnalysis(targetId) {
-  if (!LAST_ANALYSIS_DATA) return;
-  const container = el('analysisContentContainer');
-  container.innerHTML = '';
-  
-  // Destroy old charts to prevent memory leaks
-  analysisCharts.forEach(c => c.destroy());
-  analysisCharts = [];
-  
-  const cats = targetId === 'all' 
-    ? LAST_ANALYSIS_DATA.categories 
-    : LAST_ANALYSIS_DATA.categories.filter(c => c.id === targetId);
-    
-  cats.forEach((cat, index) => {
-    const section = document.createElement('div');
-    section.className = 'analysis-section';
-    
-    // Find the main metric for the chart (if any)
-    const mainMetric = cat.metrics.find(m => m.is_main) || cat.metrics[0];
-    const cid = `achart_${cat.id}_${index}`;
-    
-    // Build Table Rows
-    const tableRows = cat.metrics.map(m => {
-      const toolIcon = `<i class="fas fa-info-circle" style="color:var(--text-muted); font-size:10px; margin-left:4px;"></i>`;
-      return `
-        <tr>
-          <td>${m.name} ${toolIcon}</td>
-          <td>${m.current}</td>
-          <td>${m.avg5}</td>
-          <td>${m.ind}</td>
-        </tr>
-      `;
-    }).join('');
-    
-    section.innerHTML = `
-      <h2>${cat.title}</h2>
-      <div class="analysis-grid">
-        <div class="analysis-table-wrapper">
-          <table class="analysis-table">
-            <thead>
-              <tr>
-                <th>Fiscal year ends 27 Sept</th>
-                <th>${CURRENT_SYMBOL}<span class="t-sub">Mar 2026</span></th>
-                <th>${CURRENT_SYMBOL}<span class="t-sub">3-Yr Avg</span></th>
-                <th>PC Devices<span class="t-sub"><i class="fas fa-info-circle"></i> 5-Yr Avg</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${tableRows}
-            </tbody>
-          </table>
-        </div>
-        
-        <div class="analysis-chart-wrapper">
-          <div class="analysis-chart-header">
-             <div class="analysis-chart-title">${mainMetric.name}</div>
-             ${mainMetric.subtitle ? `<div class="analysis-chart-subtitle"><i class="fas fa-magic"></i> ${mainMetric.subtitle}</div>` : ''}
-          </div>
-          <div class="analysis-canvas-container">
-            <canvas id="${cid}"></canvas>
-          </div>
-          <div class="analysis-compare-footer">
-             <div style="display:flex; align-items:center; gap:4px;"><i class="fas fa-search"></i> Compare</div>
-             <div class="analysis-compare-tags">
-               <div class="analysis-tag active"><div class="dot" style="background:#0ea5e9;"></div> PC Devices</div>
-               <div class="analysis-tag active"><div class="dot" style="background:#f59e0b;"></div> ${CURRENT_SYMBOL}</div>
-               <div class="analysis-tag">MSFT</div>
-               <div class="analysis-tag">GOOG</div>
-               <div class="analysis-tag">AMZN</div>
-               <div class="analysis-tag">META</div>
-               <div class="analysis-tag">NVDA</div>
-             </div>
-          </div>
-        </div>
-      </div>
-    `;
-    
-    container.appendChild(section);
-    
-          // Initialize Chart
-      let chart = null;
-      if (mainMetric.data && mainMetric.data.length > 0) {
-        const ctx = el(cid).getContext('2d');
-        chart = new Chart(ctx, {
-          type: 'line',
-          data: {
-            labels: LAST_ANALYSIS_DATA.dates,
-            datasets: [
-              {
-                label: 'PC Devices',
-                data: mainMetric.ind_data,
-                borderColor: '#0ea5e9',
-                borderWidth: 2,
-                tension: 0.4,
-                pointRadius: 0
-              },
-              {
-                label: CURRENT_SYMBOL,
-                data: mainMetric.data,
-                borderColor: '#f59e0b',
-                borderWidth: 2,
-                tension: 0.4,
-                pointRadius: 0
-              }
-            ]
-          },
-          options: {
-            plugins: { legend: { display: false } },
-            scales: {
-              y: { grid: { color: 'rgba(0,0,0,0.05)' }, border: { display: false }, ticks: { font: { size: 10 } } },
-              x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 10 } } }
-            },
-            maintainAspectRatio: false
-          }
-        });
-        analysisCharts.push(chart);
-      }
-
-      // Wire up Compare tags for this chart
-      const compTags = section.querySelectorAll('.analysis-tag');
-      const colors = ['#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
-      compTags.forEach((tag, idx) => {
-        tag.onclick = () => {
-          if (!chart) return;
-          const sym = tag.innerText.trim();
-          
-          // Don't toggle the primary symbols
-          if (sym === 'PC Devices' || sym === CURRENT_SYMBOL) return;
-          
-          tag.classList.toggle('active');
-          if (tag.classList.contains('active')) {
-            // add to chart
-            const seed = Array.from(sym).reduce((acc, c) => acc + c.charCodeAt(0), 0);
-            const color = colors[idx % colors.length];
-            const newData = mainMetric.data.map(v => v * (1 + ((seed % 10)/100.0) * (Math.random() > 0.5 ? 1 : -1)));
-            chart.data.datasets.push({
-              label: sym,
-              data: newData,
-              borderColor: color,
-              borderWidth: 1.5,
-              tension: 0.4,
-              pointRadius: 0
-            });
-            let dot = tag.querySelector('.dot');
-            if (!dot) {
-                dot = document.createElement('div');
-                dot.className = 'dot';
-                tag.insertBefore(dot, tag.firstChild);
-            }
-            dot.style.background = color;
-          } else {
-            // remove from chart
-            const didx = chart.data.datasets.findIndex(d => d.label === sym);
-            if (didx !== -1) chart.data.datasets.splice(didx, 1);
-            const dot = tag.querySelector('.dot');
-            if (dot) dot.remove();
-          }
-          chart.update();
-        };
-      });
-    });
-}
-
-// Chart Initializers
 function initCharts() {
   const chartOpts = {
     layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#94a3b8' },
@@ -1204,22 +641,10 @@ function initCharts() {
     options: { rotation: -90, circumference: 180, cutout: '80%', plugins: { legend: { display: false }, tooltip: { enabled: false } }, maintainAspectRatio: false }
   });
 
-  earnAnalystGauge = new Chart(el('earnAnalystGauge').getContext('2d'), {
-    type: 'doughnut',
-    data: { labels: ['Buy', 'Hold', 'Sell'], datasets: [{ data: [100,0,0], backgroundColor: ['#10b981', '#334155', '#334155'], borderWidth: 0 }] },
-    options: { rotation: -90, circumference: 180, cutout: '80%', plugins: { legend: { display: false }, tooltip: { enabled: false } }, maintainAspectRatio: false }
-  });
-
   peBarChart = new Chart(el('peBarChart').getContext('2d'), {
     type: 'bar',
-    data: { labels: ['AAPL', 'MSFT', 'GOOG', 'AMZN'], datasets: [{ data: [0,0,0,0], backgroundColor: ['#3b82f6', '#334155', '#334155', '#334155'], borderRadius: 4 }] },
+    data: { labels: ['Current'], datasets: [{ data: [null], backgroundColor: ['#3b82f6'], borderRadius: 4 }] },
     options: { plugins: { legend: { display: false } }, scales: { y: { display: false }, x: { grid: { display: false }, border: { display: false } } }, maintainAspectRatio: false }
-  });
-
-  epsBarChart = new Chart(el('epsBarChart').getContext('2d'), {
-    type: 'bar',
-    data: { labels: [], datasets: [{ label: 'Estimate', data: [], backgroundColor: '#334155' }, { label: 'Reported', data: [], backgroundColor: '#3b82f6' }] },
-    options: { plugins: { legend: { position: 'bottom' } }, scales: { y: { beginAtZero: true, grid: { color: '#334155' }, border: { display: false } }, x: { grid: { display: false }, border: { display: false } } }, maintainAspectRatio: false }
   });
 }
 

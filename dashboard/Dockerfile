@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 LABEL description="Stock Data Pipeline Dashboard"
 
@@ -15,4 +15,4 @@ COPY . .
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--worker-class", "gevent", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "app:app"]
+CMD ["gunicorn", "--worker-class", "gevent", "--bind", "0.0.0.0:5000", "--workers", "1", "--timeout", "120", "app:app"]
