@@ -14,7 +14,7 @@ services:
     networks:
       - stock-network
     healthcheck:
-      test: ["CMD-SHELL", "cub zk-ready localhost 2181 30"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/commands/ruok > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 15
