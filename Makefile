@@ -1,21 +1,23 @@
-.PHONY: up down status
+.PHONY: up down status logs test lint validate
 
 up:
-	@echo "Starting up infrastructure..."
-	docker-compose up -d
-	@echo "Checking for Kubernetes cluster..."
-	@kubectl cluster-info >/dev/null 2>&1 || (echo "Error: No Kubernetes cluster (e.g., Minikube/Docker Desktop) is running!" && exit 1)
-	@echo "Applying Kubernetes manifests..."
-	kubectl apply -f kubernetes/ 2>/dev/null || echo "No kubernetes folder found, skipping kubectl."
-	@echo "Infrastructure is up!"
+	docker compose up --build -d
 
 down:
-	@echo "Tearing down infrastructure..."
-	kubectl delete -f kubernetes/ 2>/dev/null || true
-	docker-compose down
-	@echo "Infrastructure is down."
+	docker compose down
 
 status:
-	docker-compose ps
-	kubectl get pods 2>/dev/null || true
+	docker compose ps
 
+logs:
+	docker compose logs -f --tail=200
+
+test:
+	python -m pytest -m "not integration"
+
+lint:
+	python -m ruff check producer spark_processor dashboard tests benchmarks
+
+validate:
+	docker compose config --quiet
+	python -m compileall -q producer spark_processor dashboard tests benchmarks

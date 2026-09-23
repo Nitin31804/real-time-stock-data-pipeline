@@ -4,3 +4,12 @@ __pycache__/
 .DS_Store
 db_data/
 pgdata/
+.pytest_cache/
+.ruff_cache/
+.venv/
+.deps/
+.coverage
+htmlcov/
+artifacts/
+*.db
+*.sqlite*

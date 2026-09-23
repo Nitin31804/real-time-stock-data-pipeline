@@ -1,30 +1,53 @@
-name: CI Pipeline
+name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [main]
   pull_request:
-    branches: [ "main" ]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.11"
-        
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install flake8 pytest
-        if [ -f dashboard/requirements.txt ]; then pip install -r dashboard/requirements.txt; fi
-        
-    - name: Lint with flake8
-      run: |
-        flake8 dashboard/ producer/ spark_processor/ --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 dashboard/ producer/ spark_processor/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -r producer/requirements.txt
+          pip install -r spark_processor/requirements.txt
+          pip install -r dashboard/requirements.txt
+      - name: Lint
+        run: python -m ruff check producer spark_processor dashboard tests benchmarks
+      - name: Test
+        run: python -m pytest -m "not integration" --cov=producer --cov=spark_processor --cov=dashboard --cov-report=term-missing
+      - name: Validate Compose
+        run: docker compose config --quiet
+
+  containers:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [producer, spark_processor, dashboard]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          push: false
+          tags: stock-pipeline-${{ matrix.service }}:ci
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

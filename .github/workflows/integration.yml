@@ -1,0 +1,35 @@
+name: Pipeline integration test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  end-to-end:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install integration dependencies
+        run: pip install pytest psycopg2-binary confluent-kafka
+      - name: Start pipeline
+        run: docker compose up --build -d
+      - name: Show service state
+        run: docker compose ps
+      - name: Run end-to-end assertion
+        env:
+          RUN_PIPELINE_INTEGRATION: "1"
+        run: python -m pytest -m integration -v
+      - name: Collect logs
+        if: always()
+        run: docker compose logs --no-color > pipeline.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pipeline-logs
+          path: pipeline.log
