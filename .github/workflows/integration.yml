@@ -25,11 +25,22 @@ jobs:
         env:
           RUN_PIPELINE_INTEGRATION: "1"
         run: python -m pytest -m integration -v
+      - name: Capture dashboard screenshot
+        if: always()
+        continue-on-error: true
+        run: |
+          google-chrome --headless --no-sandbox --disable-gpu \
+            --window-size=1440,1000 \
+            --screenshot=dashboard.png \
+            http://localhost:5000
       - name: Collect logs
         if: always()
         run: docker compose logs --no-color > pipeline.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pipeline-logs
-          path: pipeline.log
+          name: pipeline-artifacts
+          if-no-files-found: warn
+          path: |
+            pipeline.log
+            dashboard.png
