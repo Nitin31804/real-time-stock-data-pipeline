@@ -2,3 +2,4 @@ confluent-kafka==2.3.0
 numpy==1.26.4
 websocket-client==1.7.0
 finnhub-python==2.4.20
+prometheus-client==0.21.1

@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 LABEL description="PySpark Structured Streaming Job — Stock Data Pipeline"
 
@@ -11,9 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python dependencies ────────────────────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    pyspark==3.5.3 \
-    psycopg2-binary==2.9.9
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # ── Download Kafka + JDBC JARs into a known /app/jars directory ───────────────
 # (We pass this dir to spark.jars at runtime via streaming_job.py)

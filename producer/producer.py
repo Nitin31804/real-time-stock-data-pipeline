@@ -9,26 +9,37 @@ Published to Kafka topic: stock.raw-ticks.v1
 Partition key: stock symbol (ensures ordering per symbol)
 """
 
-import os
 import json
+import logging
+import math
+import os
+import random
 import time
 import uuid
-import math
-import logging
-import threading
-import random
 from datetime import datetime, timezone
 
 import numpy as np
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
+from prometheus_client import Counter, Gauge, start_http_server
+
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps(
+            {
+                "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+                "level": record.levelname,
+                "service": "producer",
+                "message": record.getMessage(),
+            }
+        )
+
+
+handler = logging.StreamHandler()
+handler.setFormatter(JsonFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger("stock-producer")
 
 # ─── Configuration ────────────────────────────────────────────────────────────
@@ -36,13 +47,22 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "stock.raw-ticks.v1")
 KAFKA_DLQ_TOPIC = os.getenv("KAFKA_DLQ_TOPIC", "stock.dlq.v1")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
+DATA_MODE = os.getenv("DATA_MODE", "simulation").strip().lower()
 STOCK_SYMBOLS = [
-    s.strip()
-    for s in os.getenv("STOCK_SYMBOLS", "AAPL,GOOGL,MSFT,AMZN,TSLA").split(",")
+    s.strip() for s in os.getenv("STOCK_SYMBOLS", "AAPL,GOOGL,MSFT,AMZN,TSLA").split(",")
 ]
 TICK_INTERVAL_MS = int(os.getenv("TICK_INTERVAL_MS", "100"))
+METRICS_PORT = int(os.getenv("METRICS_PORT", "9101"))
 
-# Realistic seed prices for the GBM mock generator
+TICKS_PUBLISHED = Counter(
+    "stock_pipeline_ticks_published_total", "Ticks acknowledged by Kafka", ["source"]
+)
+PUBLISH_FAILURES = Counter("stock_pipeline_publish_failures_total", "Kafka publish failures")
+LAST_TICK_TIMESTAMP = Gauge(
+    "stock_pipeline_last_tick_timestamp_seconds", "Unix timestamp of the latest produced tick"
+)
+
+# Realistic seed prices for the disclosed GBM simulation
 SEED_PRICES = {
     "AAPL": 185.50,
     "GOOGL": 175.20,
@@ -71,10 +91,7 @@ def ensure_topics_exist():
             future.result()
             logger.info(f"✅ Topic created: {topic}")
         except Exception as e:
-            if (
-                "already exists" in str(e).lower()
-                or "topic already exists" in str(e).lower()
-            ):
+            if "already exists" in str(e).lower() or "topic already exists" in str(e).lower():
                 logger.info(f"ℹ️  Topic already exists: {topic}")
             else:
                 logger.warning(f"⚠️  Could not create topic {topic}: {e}")
@@ -96,7 +113,14 @@ def build_kafka_producer() -> Producer:
 
 def delivery_report(err, msg):
     if err is not None:
+        PUBLISH_FAILURES.inc()
         logger.error(f"❌ Delivery failed for {msg.key()}: {err}")
+        return
+    try:
+        source = json.loads(msg.value()).get("source", "unknown")
+    except (TypeError, json.JSONDecodeError):
+        source = "unknown"
+    TICKS_PUBLISHED.labels(source=source).inc()
 
 
 def publish_tick(producer: Producer, tick: dict):
@@ -110,7 +134,9 @@ def publish_tick(producer: Producer, tick: dict):
             callback=delivery_report,
         )
         producer.poll(0)  # trigger callbacks without blocking
+        LAST_TICK_TIMESTAMP.set(time.time())
     except Exception as e:
+        PUBLISH_FAILURES.inc()
         logger.error(f"Publish error: {e}")
 
 
@@ -128,9 +154,7 @@ class GBMMockGenerator:
         self.mu = 0.12  # annual drift  ~12%
         self.sigma = 0.25  # annual vol    ~25%
         # Initialise prices from seed dict or random reasonable range
-        self.prices = {
-            s: SEED_PRICES.get(s, round(random.uniform(50, 500), 2)) for s in symbols
-        }
+        self.prices = {s: SEED_PRICES.get(s, round(random.uniform(50, 500), 2)) for s in symbols}
         self.volumes = {s: random.randint(50_000, 500_000) for s in symbols}
         logger.info(f"📊 GBM Mock Generator initialised for: {', '.join(symbols)}")
         for sym, price in self.prices.items():
@@ -142,8 +166,7 @@ class GBMMockGenerator:
         eps = np.random.standard_normal()
         # GBM discrete step
         S_new = S * math.exp(
-            (self.mu - 0.5 * self.sigma**2) * self.dt
-            + self.sigma * math.sqrt(self.dt) * eps
+            (self.mu - 0.5 * self.sigma**2) * self.dt + self.sigma * math.sqrt(self.dt) * eps
         )
         # Clamp to prevent negative or absurd prices
         S_new = max(S_new, 0.01)
@@ -161,7 +184,7 @@ class GBMMockGenerator:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "exchange": "MOCK",
             "trade_conditions": ["SIMULATED"],
-            "source": "gbm_mock",
+            "source": "simulation_gbm",
         }
 
     def run(self, producer: Producer, interval_ms: int):
@@ -172,9 +195,7 @@ class GBMMockGenerator:
             for symbol in self.symbols:
                 tick = self.next_tick(symbol)
                 publish_tick(producer, tick)
-                logger.debug(
-                    f"[GBM] {tick['symbol']} → ${tick['price']:.4f} vol={tick['volume']}"
-                )
+                logger.debug(f"[GBM] {tick['symbol']} → ${tick['price']:.4f} vol={tick['volume']}")
             time.sleep(interval_s)
 
 
@@ -182,7 +203,7 @@ class GBMMockGenerator:
 class FinnhubProducer:
     """
     Connects to Finnhub WebSocket API and streams live trade ticks.
-    Falls back to GBM mock if connection drops.
+    Reconnects to Finnhub if the connection drops.
     """
 
     def __init__(self, api_key: str, symbols: list[str], producer: Producer):
@@ -250,13 +271,20 @@ class FinnhubProducer:
 
 # ─── Main Entry Point ─────────────────────────────────────────────────────────
 def main():
+    if DATA_MODE not in {"simulation", "live"}:
+        raise ValueError("DATA_MODE must be either 'simulation' or 'live'.")
+    if DATA_MODE == "live" and not FINNHUB_API_KEY:
+        raise ValueError("DATA_MODE=live requires FINNHUB_API_KEY.")
+
+    start_http_server(METRICS_PORT)
+    logger.info("Prometheus metrics listening on port %s", METRICS_PORT)
     logger.info("=" * 60)
     logger.info("  Real-Time Stock Data Pipeline — Kafka Producer")
     logger.info("=" * 60)
     logger.info(f"  Kafka broker  : {KAFKA_BOOTSTRAP_SERVERS}")
     logger.info(f"  Topic         : {KAFKA_TOPIC}")
     logger.info(f"  Symbols       : {', '.join(STOCK_SYMBOLS)}")
-    mode = "Finnhub WebSocket" if FINNHUB_API_KEY else "GBM Mock Generator"
+    mode = "Finnhub WebSocket" if DATA_MODE == "live" else "GBM Mock Generator"
     logger.info(f"  Mode          : {mode}")
     logger.info("=" * 60)
 
@@ -281,12 +309,12 @@ def main():
     ensure_topics_exist()
     producer = build_kafka_producer()
 
-    if FINNHUB_API_KEY:
+    if DATA_MODE == "live":
         logger.info("🌐 Starting Finnhub WebSocket producer...")
         fh = FinnhubProducer(FINNHUB_API_KEY, STOCK_SYMBOLS, producer)
         fh.run()
     else:
-        logger.warning("⚠️  No FINNHUB_API_KEY set — using GBM mock generator.")
+        logger.warning("Simulation mode enabled — publishing generated GBM ticks.")
         gbm = GBMMockGenerator(STOCK_SYMBOLS)
         gbm.run(producer, TICK_INTERVAL_MS)
 

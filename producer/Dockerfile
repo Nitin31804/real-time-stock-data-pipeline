@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 LABEL maintainer="stock-pipeline"
 LABEL description="Kafka Stock Data Producer"
