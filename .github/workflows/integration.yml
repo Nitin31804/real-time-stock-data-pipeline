@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install integration dependencies
-        run: pip install pytest psycopg2-binary confluent-kafka
+        run: pip install pytest psycopg2-binary confluent-kafka selenium
       - name: Start pipeline
         run: docker compose up --build -d
       - name: Show service state
@@ -28,12 +28,7 @@ jobs:
       - name: Capture dashboard screenshot
         if: always()
         continue-on-error: true
-        run: |
-          google-chrome --headless --no-sandbox --disable-gpu \
-            --window-size=1440,1000 \
-            --virtual-time-budget=10000 \
-            --screenshot=dashboard.png \
-            http://localhost:5000
+        run: python tests/integration/capture_dashboard.py
       - name: Collect logs
         if: always()
         run: docker compose logs --no-color > pipeline.log
