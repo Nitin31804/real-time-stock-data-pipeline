@@ -31,6 +31,7 @@ jobs:
         run: |
           google-chrome --headless --no-sandbox --disable-gpu \
             --window-size=1440,1000 \
+            --virtual-time-budget=10000 \
             --screenshot=dashboard.png \
             http://localhost:5000
       - name: Collect logs
