@@ -548,7 +548,7 @@ def metrics():
         )
         candle_stats = query_one(
             """
-            SELECT EXTRACT(EPOCH FROM (NOW() - MAX(bucket_end))) AS latest_candle_age
+            SELECT EXTRACT(EPOCH FROM (NOW() - (MAX(bucket_start) + INTERVAL '1 minute'))) AS latest_candle_age
             FROM stock_ohlcv_1m;
             """
         )

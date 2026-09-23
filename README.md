@@ -93,6 +93,8 @@ failures never silently become invented market data: responses name their
 - Kafka messages are keyed by symbol to preserve per-symbol partition ordering.
 - Every raw event carries a UUID used as the PostgreSQL primary key.
 - Replaying a raw event is safe because duplicate event IDs are ignored.
+- A fresh deployment reads retained Kafka data from the earliest offset, then resumes
+  from Spark checkpoints, so ticks published during startup are not silently skipped.
 - Candles use one-minute event-time windows and a 30-second watermark.
 - Open and close use the earliest and latest `(timestamp, event_id)` values.
 - Append mode emits a candle only after its window is finalized.
