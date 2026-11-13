@@ -1,0 +1,19 @@
+name: Feature Request
+description: Propose a new feature or architectural enhancement
+title: "[FEAT]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Feature Proposal
+      description: Describe the feature you would like to see added.
+    validations:
+      required: true
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Motivation / Use Case
+      description: Why would this feature be useful?
+    validations:
+      required: true
